@@ -10,6 +10,8 @@ Requires macOS 14+ on Apple silicon.
 brew install --cask volonehoda/tap/etherlynx-battery
 ```
 
+If Homebrew asks you to trust the tap first: `brew trust --tap volonehoda/tap`. Update with `brew upgrade --cask etherlynx-battery`.
+
 Or download the DMG from [Releases](https://github.com/VoloNehoda/etherlynx-battery/releases) and drag the app to Applications.
 
 The app is ad-hoc signed, not notarized. The Homebrew cask clears the quarantine flag after install; with the DMG, the first launch needs right-click → Open (or System Settings → Privacy & Security → Open Anyway).

@@ -1,0 +1,1209 @@
+import SwiftUI
+
+// Система etherlynx.xyz: біле тло, небесна сцена для головного, білі панелі з волосяною рамкою,
+// рядок статистики з роздільниками, Ink-пігулки. Поповер ніколи не вищий за екран — вміст прокручується.
+
+struct PopoverView: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let pal = Palette(scheme: scheme)
+        Group {
+            switch model.page {
+            case .main: MainPage(model: model)
+            case .settings: SettingsPage(model: model)
+            }
+        }
+        .frame(width: 372)
+        .background(pal.bg)
+        .foregroundStyle(pal.fg)
+        .environment(\.palette, pal)
+        .font(Brand.text(12))
+    }
+}
+
+private struct PaletteKey: EnvironmentKey { static let defaultValue = Palette(scheme: .light) }
+extension EnvironmentValues {
+    var palette: Palette { get { self[PaletteKey.self] } set { self[PaletteKey.self] = newValue } }
+}
+
+/// Прокрутка, що стискається до висоти вмісту, але не більша за екран.
+/// ScrollView + maxHeight + fixedSize дає попoверу справжню висоту: коротке — як є, довге — до межі й прокрутка.
+/// (ViewThatFits тут не годиться: sizeThatFits віддає максимум навіть для короткого вмісту.)
+struct FitScroll<Content: View>: View {
+    @ViewBuilder var content: Content
+    /// Увесь екран під меню-баром мінус хром поповера (вкладки, підвал, відступи, стрілка).
+    static var maxHeight: CGFloat { max(300, (NSScreen.main?.visibleFrame.height ?? 800) - 170) }
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) { content }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: Self.maxHeight)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+// MARK: - Поверхні
+
+/// Біла панель із волосяною рамкою (r 20), як картки на сайті.
+struct Panel<Content: View>: View {
+    @Environment(\.palette) private var pal
+    var padding: CGFloat = 14
+    @ViewBuilder var content: Content
+    var body: some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(pal.panel, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(pal.line))
+    }
+}
+
+/// Сцена (r 28): небесний градієнт — лише для головного блока екрана.
+struct Stage<Content: View>: View {
+    @Environment(\.palette) private var pal
+    @ViewBuilder var content: Content
+    var body: some View {
+        content
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(pal.stage.clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous)))
+    }
+}
+
+struct Label2: View {
+    @Environment(\.palette) private var pal
+    let text: String
+    var trailing: String? = nil
+    var body: some View {
+        HStack {
+            Text(text).font(Brand.text(11, .medium)).foregroundStyle(pal.muted)
+            Spacer()
+            if let t = trailing { Text(t).font(Brand.text(11)).foregroundStyle(pal.muted) }
+        }
+    }
+}
+
+// MARK: - Головна
+
+struct MainPage: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.palette) private var pal
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TopBar(model: model).fixedSize(horizontal: false, vertical: true).layoutPriority(2)
+            FitScroll {
+                Group {
+                    if let b = model.battery {
+                        switch model.tab {
+                        case .overview: OverviewTab(model: model, b: b)
+                        case .charge: ChargeTab(control: model.charge, b: b)
+                        case .power: PowerTab(model: model, b: b)
+                        case .devices: DevicesTab(model: model)
+                        }
+                    } else {
+                        Panel { Text("No battery found").foregroundStyle(pal.muted).frame(maxWidth: .infinity).padding(30) }
+                    }
+                }
+                .padding(.bottom, 2)
+            }
+        }
+        .padding(12)
+    }
+}
+
+struct TopBar: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.palette) private var pal
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(AppModel.Tab.allCases) { t in
+                let on = model.tab == t
+                Button { model.tab = t; if t == .power { model.sampleEnergy() } } label: {
+                    Text(t.rawValue)
+                        .font(Brand.text(12.5, .medium))
+                        .padding(.horizontal, 13).padding(.vertical, 7)
+                        .background(on ? pal.fg : .clear, in: Capsule())
+                        .foregroundStyle(on ? pal.bg : pal.muted)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+            Button { withAnimation(.snappy) { model.page = .settings } } label: {
+                ZStack {
+                    Circle().fill(pal.fg)
+                    Image(systemName: "line.3.horizontal").font(.system(size: 11, weight: .semibold)).foregroundStyle(pal.bg)
+                }
+                .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+// MARK: Overview
+
+struct OverviewTab: View {
+    @ObservedObject var model: AppModel
+    let b: BatterySnapshot
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HeroStage(b: b)
+            StatsRow(b: b, drain: model.history.drainPerHour(.day))
+            if b.needsService { ServicePanel(b: b) }
+            DotHistoryPanel(model: model)
+            LowPowerRow(model: model, b: b)
+        }
+    }
+}
+
+struct HeroStage: View {
+    let b: BatterySnapshot
+    @Environment(\.palette) private var pal
+    var body: some View {
+        Stage {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    Text("\(b.percent)")
+                        .font(Brand.display(84))
+                        .tracking(-4)
+                        .monospacedDigit()
+                        .foregroundStyle(b.percent <= 20 && !b.onAC ? Brand.signal : pal.fg)
+                        .contentTransition(.numericText())
+                    Text("%").font(Brand.display(30)).foregroundStyle(pal.fg.opacity(0.55))
+                    Spacer()
+                    if b.isCharging || b.lowPower || b.onAC {
+                        Image(systemName: b.isCharging ? "bolt.fill" : (b.lowPower ? "leaf.fill" : "powerplug.fill"))
+                            .font(.system(size: 18, weight: .semibold)).foregroundStyle(pal.state(b))
+                    }
+                }
+                .frame(height: 78)
+                TickRuler(percent: b.percent, color: pal.state(b))
+                Text(b.statusLine).font(Brand.text(13, .medium))
+                    .foregroundStyle(b.chargerTooWeak ? Brand.signal : pal.fg.opacity(0.7))
+                if Settings.shared.percentMode != .macOS && b.macPercent != b.percent {
+                    Text("\(Settings.shared.percentMode.rawValue) · macOS shows \(b.macPercent)%")
+                        .font(Brand.text(11)).foregroundStyle(pal.fg.opacity(0.5))
+                }
+            }
+        }
+    }
+}
+
+/// Лінійка з рисками: пройдене — лінією, поточний рівень — крапкою.
+struct TickRuler: View {
+    let percent: Int
+    var color: Color
+    @Environment(\.palette) private var pal
+    var body: some View {
+        Canvas { ctx, size in
+            let n = 41
+            for i in 0..<n {
+                let x = size.width * CGFloat(i) / CGFloat(n - 1)
+                let major = i % 10 == 0
+                let h: CGFloat = major ? 8 : 4
+                ctx.fill(Path(CGRect(x: x - 0.5, y: size.height - h, width: 1, height: h)),
+                         with: .color(pal.fg.opacity(major ? 0.45 : 0.2)))
+            }
+            let mx = size.width * CGFloat(percent) / 100
+            ctx.fill(Path(CGRect(x: 0, y: size.height - 1.5, width: mx, height: 1.5)), with: .color(color))
+            ctx.fill(Path(ellipseIn: CGRect(x: mx - 4, y: 0, width: 8, height: 8)), with: .color(color))
+        }
+        .frame(height: 16)
+        .padding(.horizontal, 4)
+        .overlay(alignment: .bottom) {
+            HStack { Text("0"); Spacer(); Text("50"); Spacer(); Text("100") }
+                .font(Brand.mono(8, .regular)).foregroundStyle(pal.fg.opacity(0.5)).offset(y: 12)
+        }
+        .padding(.bottom, 10)
+    }
+}
+
+/// Рядок цифр із волосяними роздільниками — як статистика на volodymyr.buzz.
+struct StatsRow: View {
+    let b: BatterySnapshot
+    let drain: Double?
+    @Environment(\.palette) private var pal
+
+    var body: some View {
+        Panel(padding: 0) {
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    Stat(value: "\(b.health)%", caption: "Health · \(b.fullCapacity) of \(b.designCapacity) mAh",
+                         alert: b.health < 80)
+                    Divider().overlay(pal.line)
+                    Stat(value: "\(b.cycles)", caption: "Cycles · Apple rates it for \(b.designCycles)", alert: false)
+                }
+                Divider().overlay(pal.line)
+                HStack(spacing: 0) {
+                    Stat(value: b.temperature.map { String(format: "%.0f°", $0) } ?? "—", caption: tempNote,
+                         alert: (b.temperature ?? 0) >= 40)
+                    Divider().overlay(pal.line)
+                    Stat(value: String(format: "%.1f W", b.isCharging ? b.watts : b.systemWatts),
+                         caption: b.isCharging ? "Into the battery" : (drain.map { String(format: "Mac draw · ≈ %.0f%% an hour", $0) } ?? "Mac draw right now"),
+                         alert: false)
+                }
+            }
+        }
+    }
+
+    private var tempNote: String {
+        guard let t = b.temperature else { return "Temperature · no sensor" }
+        if t >= 40 { return "Hot — let it cool down" }
+        if t < 10 { return "Temperature · cold" }
+        return "Temperature · normal"
+    }
+
+    struct Stat: View {
+        let value: String, caption: String, alert: Bool
+        @Environment(\.palette) private var pal
+        var body: some View {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(value).font(Brand.display(28)).tracking(-0.8).monospacedDigit()
+                    .foregroundStyle(alert ? Brand.signal : pal.fg)
+                Text(caption).font(Brand.text(10.5)).foregroundStyle(pal.muted)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+        }
+    }
+}
+
+struct ServicePanel: View {
+    let b: BatterySnapshot
+    @Environment(\.palette) private var pal
+    var body: some View {
+        Panel {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Service recommended").font(Brand.text(13, .semibold)).foregroundStyle(Brand.signal)
+                Text(b.health < 80
+                     ? "Capacity is down to \(b.health)% of new. Apple replaces batteries below 80%."
+                     : "\(b.cycles) cycles — past the \(b.designCycles) Apple designs for.")
+                    .font(Brand.text(11)).foregroundStyle(pal.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+/// Історія як точкова матриця: стовпець — відрізок часу, висота — рівень.
+struct DotHistoryPanel: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.palette) private var pal
+    private let cols = 30, rows = 10
+
+    var body: some View {
+        let data = model.history.buckets(model.range, count: cols)
+        Panel {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Charge history").font(Brand.text(11, .medium)).foregroundStyle(pal.muted)
+                    Spacer()
+                    RangeSwitch(range: $model.range)
+                }
+                Canvas { ctx, size in
+                    let step = size.width / CGFloat(cols)
+                    let d = min(step, size.height / CGFloat(rows)) * 0.6
+                    for c in 0..<cols {
+                        let cell = data[c]
+                        let lit = cell.map { Int((Double($0.level) / 10).rounded()) } ?? 0
+                        for r in 0..<rows {
+                            let x = CGFloat(c) * step + (step - d) / 2
+                            let y = size.height - CGFloat(r + 1) * (size.height / CGFloat(rows)) + (size.height / CGFloat(rows) - d) / 2
+                            var color = pal.fg.opacity(0.07)
+                            if r < lit, let cell {
+                                color = cell.charging ? pal.charging : (cell.level <= 20 ? Brand.signal : pal.fg.opacity(0.3 + 0.7 * Double(r + 1) / Double(rows)))
+                            }
+                            ctx.fill(Path(ellipseIn: CGRect(x: x, y: y, width: d, height: d)), with: .color(color))
+                        }
+                    }
+                }
+                .frame(height: 84)
+                HStack {
+                    Text(axisLeft); Spacer(); Text(axisMid); Spacer(); Text("now")
+                }
+                .font(Brand.mono(9, .regular)).foregroundStyle(pal.muted)
+                if data.allSatisfy({ $0 == nil }) {
+                    Text("Fills in as you use the Mac — one point every 5 minutes.").font(Brand.text(10.5)).foregroundStyle(pal.muted)
+                } else {
+                    HStack(spacing: 12) {
+                        Legend(color: pal.fg, text: "On battery")
+                        Legend(color: pal.charging, text: "Charging")
+                        if data.contains(where: { ($0?.level ?? 100) <= 20 && !($0?.charging ?? true) }) {
+                            Legend(color: Brand.signal, text: "Below 20%")
+                        }
+                    }
+                }
+            }
+        }
+    }
+    private var axisLeft: String { switch model.range { case .day: "−24h"; case .week: "−7d"; case .month: "−30d" } }
+    private var axisMid: String { switch model.range { case .day: "−12h"; case .week: "−3.5d"; case .month: "−15d" } }
+}
+
+struct RangeSwitch: View {
+    @Binding var range: HistoryRange
+    @Environment(\.palette) private var pal
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(HistoryRange.allCases) { r in
+                Button { range = r } label: {
+                    Text(r.rawValue).font(Brand.text(10.5, .medium))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(range == r ? pal.fg : .clear, in: Capsule())
+                        .foregroundStyle(range == r ? pal.bg : pal.muted)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+enum EnergyRange: String, CaseIterable, Identifiable {
+    case live = "Live", day = "24H", week = "7D", month = "30D"
+    var id: String { rawValue }
+    var history: HistoryRange? {
+        switch self { case .live: nil; case .day: .day; case .week: .week; case .month: .month }
+    }
+}
+
+struct EnergySwitch: View {
+    @Binding var range: EnergyRange
+    @Environment(\.palette) private var pal
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(EnergyRange.allCases) { r in
+                Button { range = r } label: {
+                    Text(r.rawValue).font(Brand.text(10.5, .medium))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(range == r ? pal.fg : .clear, in: Capsule())
+                        .foregroundStyle(range == r ? pal.bg : pal.muted)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+struct Legend: View {
+    let color: Color, text: String
+    @Environment(\.palette) private var pal
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(text).font(Brand.text(10.5)).foregroundStyle(pal.muted)
+        }
+    }
+}
+
+struct LowPowerRow: View {
+    @ObservedObject var model: AppModel
+    let b: BatterySnapshot
+    @Environment(\.palette) private var pal
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Low Power Mode").font(Brand.text(12.5, .medium))
+                Text(model.charge.installed ? "Or right-click the menu bar icon" : "Or right-click the menu bar icon · asks for your password")
+                    .font(Brand.text(10.5)).foregroundStyle(pal.muted)
+            }
+            Spacer()
+            if model.lowPowerBusy { ProgressView().controlSize(.small) }
+            Toggle("", isOn: Binding(get: { b.lowPower }, set: { _ in model.toggleLowPower() }))
+                .labelsHidden().toggleStyle(.switch).controlSize(.small).tint(pal.toggleTint)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(pal.sunk, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+// MARK: Charge
+
+struct ChargeTab: View {
+    @ObservedObject var control: ChargeControl
+    let b: BatterySnapshot
+    @Environment(\.palette) private var pal
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if !control.installed {
+                InstallStage(control: control)
+            } else {
+                if control.helperOutdated {
+                    Panel {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Helper update").font(Brand.text(12.5, .medium))
+                                Text("A newer helper ships with this build. macOS asks for your password once.")
+                                    .font(Brand.text(10.5)).foregroundStyle(pal.muted).fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer()
+                            InkPill(title: control.busy ? "Updating…" : "Update") { control.install() }.disabled(control.busy)
+                        }
+                    }
+                }
+                LimitStage(control: control, b: b)
+                Panel {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle2("Sailing mode", detail: "Charge again only below \(control.config.limit - control.config.sailRange)%, not every time it dips under the limit.",
+                                isOn: $control.config.sailing) {
+                            Stepper2(value: $control.config.sailRange, range: 2...20, step: 1, suffix: "%")
+                        }
+                        Divider().overlay(pal.line)
+                        Toggle2("Heat protection", detail: String(format: "Pause charging above %.0f° and hold for 5 minutes once it trips.", control.config.heatMax),
+                                isOn: $control.config.heatProtection) {
+                            Stepper2(value: Binding(get: { Int(control.config.heatMax) }, set: { control.config.heatMax = Double($0) }),
+                                     range: 30...45, step: 1, suffix: "°")
+                        }
+                        if control.canDischarge {
+                            // Розряд до ліміту — лише коли є і заборона заряду, і вимкнення адаптера
+                            Divider().overlay(pal.line)
+                            Toggle2("Discharge to the limit", detail: "If the battery is above the limit when you plug in, run on battery down to it.",
+                                    isOn: $control.config.discharge) { EmptyView() }
+                        }
+                        Divider().overlay(pal.line)
+                        Toggle2("Stay awake until the limit", detail: "A sleeping Mac would charge past the limit to 100%.",
+                                isOn: $control.config.sleepUntilLimit) { EmptyView() }
+                        if control.status?.capabilities.contains("led") ?? true {
+                            Divider().overlay(pal.line)
+                            Toggle2("MagSafe light", detail: "Green while holding the limit, amber while charging to it.",
+                                    isOn: $control.config.magsafeLED) { EmptyView() }
+                        }
+                    }
+                }
+                if control.adapterOnly {
+                    Text("This Mac's firmware can't pause charging directly, so the limit pauses the adapter: the Mac runs on battery until it drops to the sailing point, then charges back up.")
+                        .font(Brand.text(10.5)).foregroundStyle(pal.muted).fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 4)
+                }
+                HStack {
+                    Button("Remove helper") { control.uninstall() }
+                        .buttonStyle(.plain).font(Brand.text(11, .medium)).foregroundStyle(pal.muted)
+                    Spacer()
+                    if let e = control.error { Text(e).font(Brand.text(10.5)).foregroundStyle(Brand.signal).lineLimit(2) }
+                }
+                .padding(.horizontal, 4)
+            }
+        }
+        .onAppear { control.readStatus() }
+    }
+}
+
+struct InstallStage: View {
+    @ObservedObject var control: ChargeControl
+    @Environment(\.palette) private var pal
+    var body: some View {
+        Stage {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Charge limit").font(Brand.display(30)).tracking(-0.8)
+                Text("Keep the battery at 80% instead of 100%, pause charging when it's hot, sail between charges. A small helper does the switching in the background — macOS asks for your admin password once.")
+                    .font(Brand.text(12)).foregroundStyle(pal.fg.opacity(0.7)).fixedSize(horizontal: false, vertical: true)
+                Text("Removing the helper puts charging back to normal.")
+                    .font(Brand.text(11)).foregroundStyle(pal.fg.opacity(0.55))
+                HStack {
+                    InkPill(title: control.busy ? "Installing…" : "Install helper") { control.install() }
+                        .disabled(control.busy)
+                    if let e = control.error { Text(e).font(Brand.text(10.5)).foregroundStyle(Brand.signal).lineLimit(2) }
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+}
+
+struct LimitStage: View {
+    @ObservedObject var control: ChargeControl
+    let b: BatterySnapshot
+    @Environment(\.palette) private var pal
+
+    var body: some View {
+        Stage {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Limit").font(Brand.text(11, .medium)).foregroundStyle(pal.fg.opacity(0.6))
+                        HStack(alignment: .firstTextBaseline, spacing: 2) {
+                            Text("\(control.config.limit)").font(Brand.display(64)).tracking(-3).monospacedDigit()
+                                .contentTransition(.numericText())
+                            Text("%").font(Brand.display(24)).foregroundStyle(pal.fg.opacity(0.55))
+                        }
+                    }
+                    Spacer()
+                    Toggle("", isOn: $control.config.enabled).labelsHidden().toggleStyle(.switch).tint(pal.toggleTint)
+                }
+                Slider(value: Binding(get: { Double(control.config.limit) },
+                                      set: { control.config.limit = Int(($0 / 5).rounded() * 5) }),
+                       in: 50...100)
+                    .tint(pal.fg)
+                    .disabled(!control.config.enabled)
+                Text(stateLine).font(Brand.text(12.5, .medium))
+                    .foregroundStyle(control.status?.mode == .heat || control.status?.mode == .unsupported ? Brand.signal : pal.fg.opacity(0.75))
+                    .fixedSize(horizontal: false, vertical: true)
+                if control.config.enabled && control.config.limit < 100 {
+                    InkPill(title: control.config.topUp ? "Topping up — tap to cancel" : "Top up to 100% once",
+                            symbol: control.config.topUp ? "xmark" : "bolt.fill") {
+                        control.config.topUp.toggle()
+                    }
+                }
+            }
+        }
+        .opacity(control.config.enabled ? 1 : 0.85)
+    }
+
+    private var stateLine: String {
+        guard control.helperAlive, let s = control.status else {
+            return control.installed ? "Waiting for the helper to report…" : "Helper not installed"
+        }
+        if let n = s.note { return n }
+        let c = control.config
+        switch s.mode {
+        case .off: return c.enabled ? "On battery — the limit applies when you plug in" : "Limit off — charging normally to 100%"
+        case .charging: return "Charging to \(c.limit)%"
+        case .holding:
+            if s.percent > c.limit + 1 {
+                return "Not charging — \(s.percent)% is above the \(c.limit)% limit. Use it down; charging resumes at \(c.sailing ? c.limit - c.sailRange : c.limit - 1)%."
+            }
+            return c.sailing ? "Holding \(c.limit)% · charges again at \(c.limit - c.sailRange)%" : "Holding at \(c.limit)%"
+        case .discharging: return "Above the limit — running on battery down to \(c.limit)%"
+        case .heat: return String(format: "Paused — battery is %.0f°, waiting for it to cool", s.temperature ?? 0)
+        case .topUp: return "Topping up to 100%, then back to \(c.limit)%"
+        case .lowSafety: return "Below 10% — charging normally"
+        case .unsupported: return "Charge control isn't supported on this Mac"
+        }
+    }
+}
+
+/// Рядок налаштування: назва, пояснення одним реченням, додатковий контрол і перемикач.
+struct Toggle2<Extra: View>: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+    @ViewBuilder var extra: Extra
+    @Environment(\.palette) private var pal
+    init(_ title: String, detail: String, isOn: Binding<Bool>, @ViewBuilder extra: () -> Extra) {
+        self.title = title; self.detail = detail; self._isOn = isOn; self.extra = extra()
+    }
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(Brand.text(12.5, .medium))
+                Text(detail).font(Brand.text(10.5)).foregroundStyle(pal.muted).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 6)
+            if isOn { extra }
+            Toggle("", isOn: $isOn).labelsHidden().toggleStyle(.switch).controlSize(.small).tint(pal.toggleTint)
+        }
+    }
+}
+
+struct Stepper2: View {
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    let step: Int
+    let suffix: String
+    @Environment(\.palette) private var pal
+    var body: some View {
+        HStack(spacing: 0) {
+            Button { value = max(range.lowerBound, value - step) } label: { Image(systemName: "minus").frame(width: 20, height: 20) }
+            Text("\(value)\(suffix)").font(Brand.mono(10.5, .semibold)).frame(minWidth: 30)
+            Button { value = min(range.upperBound, value + step) } label: { Image(systemName: "plus").frame(width: 20, height: 20) }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 9, weight: .bold))
+        .padding(.horizontal, 2)
+        .background(pal.sunk, in: Capsule())
+    }
+}
+
+// MARK: Power
+
+struct PowerTab: View {
+    @ObservedObject var model: AppModel
+    let b: BatterySnapshot
+    @Environment(\.palette) private var pal
+    @State private var energyRange: EnergyRange = .live
+
+    var body: some View {
+        VStack(spacing: 10) {
+            PowerFlowStage(b: b)
+            Panel {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Energy by app").font(Brand.text(11, .medium)).foregroundStyle(pal.muted)
+                        Spacer()
+                        EnergySwitch(range: $energyRange)
+                    }
+                    if energyRange == .live {
+                        if model.apps.isEmpty {
+                            Text("Sampling…").font(Brand.text(11)).foregroundStyle(pal.muted)
+                        }
+                        ForEach(model.apps.prefix(7)) { a in AppRow(model: model, app: a) }
+                    } else {
+                        let top = model.energy.top(energyRange.history!, limit: 7)
+                        if top.isEmpty {
+                            Text("Builds up as the app runs — sampled every 2 minutes.").font(Brand.text(11)).foregroundStyle(pal.muted)
+                        }
+                        ForEach(top, id: \.name) { t in
+                            HStack(spacing: 8) {
+                                AppIcon(path: t.path).frame(width: 20, height: 20)
+                                Text(t.name).font(Brand.text(12.5, .medium)).lineLimit(1)
+                                Spacer()
+                                GeometryReader { g in
+                                    ZStack(alignment: .leading) {
+                                        Capsule().fill(pal.fg.opacity(0.08))
+                                        Capsule().fill(pal.fg).frame(width: g.size.width * t.share)
+                                    }
+                                }
+                                .frame(width: 80, height: 4)
+                                Text("\(Int((t.share * 100).rounded()))%").font(Brand.mono(10.5, .semibold)).frame(width: 34, alignment: .trailing)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear { model.sampleEnergy() }
+    }
+}
+
+struct AppIcon: View {
+    let path: String?
+    var body: some View {
+        if let p = path { Image(nsImage: NSWorkspace.shared.icon(forFile: p)).resizable() }
+        else { Image(systemName: "gearshape").resizable().scaledToFit().foregroundStyle(Brand.muted).padding(2) }
+    }
+}
+
+struct AppRow: View {
+    @ObservedObject var model: AppModel
+    let app: AppEnergy
+    @Environment(\.palette) private var pal
+
+    var body: some View {
+        let open = model.expandedApp == app.name
+        VStack(alignment: .leading, spacing: 6) {
+            Button { withAnimation(.snappy) { model.expandedApp = open ? nil : app.name } } label: {
+                HStack(spacing: 8) {
+                    AppIcon(path: app.bundlePath).frame(width: 20, height: 20)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(app.name).font(Brand.text(12.5, .medium)).lineLimit(1)
+                        if app.hot {
+                            Text("Using more than usual").font(Brand.text(10.5, .medium)).foregroundStyle(Brand.signal)
+                        }
+                    }
+                    Spacer()
+                    // Спарклайн лише з 5+ замірів: дві точки — не тренд, а випадкова похила
+                    Sparkline(values: app.history.count >= 5 ? app.history : [], color: app.hot ? Brand.signal : pal.fg)
+                        .frame(width: 64, height: 18)
+                    Text(String(format: "%.0f", app.impact)).font(Brand.mono(11, .semibold)).frame(width: 30, alignment: .trailing)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if open {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(String(format: "30-day avg %.0f · recent peak %.0f", app.average, max(app.impact, app.history.max() ?? 0)))
+                        Spacer()
+                        Text("\(app.processes.count) process\(app.processes.count == 1 ? "" : "es")")
+                    }
+                    .font(Brand.text(10.5)).foregroundStyle(pal.muted)
+                    ForEach(Array(app.processes.prefix(6).enumerated()), id: \.offset) { _, p in
+                        HStack {
+                            Text(p.name).font(Brand.mono(10, .regular)).lineLimit(1)
+                            Spacer()
+                            Text(String(format: "%.1f", p.impact)).font(Brand.mono(10, .regular))
+                        }
+                        .foregroundStyle(pal.fg.opacity(0.75))
+                    }
+                }
+                .padding(.leading, 12).padding(.vertical, 2)
+                .overlay(alignment: .leading) { Rectangle().fill(pal.line).frame(width: 1) }
+                .padding(.leading, 9)
+            }
+        }
+    }
+}
+
+struct Sparkline: View {
+    let values: [Double]
+    let color: Color
+    var body: some View {
+        Canvas { ctx, size in
+            guard values.count > 1, let mx = values.max(), mx > 0 else { return }
+            var p = Path()
+            for (i, v) in values.enumerated() {
+                let pt = CGPoint(x: size.width * CGFloat(i) / CGFloat(values.count - 1), y: size.height * (1 - CGFloat(v / mx)))
+                i == 0 ? p.move(to: pt) : p.addLine(to: pt)
+            }
+            ctx.stroke(p, with: .color(color), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
+        }
+    }
+}
+
+/// Розподіл живлення як Sankey: джерела ліворуч, споживачі праворуч,
+/// товщина стрічки — вати, що йдуть цим шляхом. Ширини анімуються пружиною.
+struct PowerFlowStage: View {
+    let b: BatterySnapshot
+    @Environment(\.palette) private var pal
+
+    var body: some View {
+        let warn = b.chargerTooWeak
+        Stage {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Power flow").font(Brand.text(11, .medium)).foregroundStyle(pal.fg.opacity(0.6))
+                    Spacer()
+                    Text(String(format: "%.1f W total", b.onAC ? max(b.inputWatts, b.systemWatts) : b.systemWatts))
+                        .font(Brand.text(11)).foregroundStyle(pal.fg.opacity(0.6))
+                }
+                Sankey(adapterToBattery: b.onAC && b.isCharging ? max(0, b.watts) : 0,
+                       adapterToMac: b.onAC ? max(0, b.systemWatts - max(0, -b.watts)) : 0,
+                       batteryToMac: max(0, -b.watts),
+                       onAC: b.onAC,
+                       adapterLabel: b.adapterWatts.map { "\($0)W" } ?? String(format: "%.0fW", b.inputWatts),
+                       pal: pal)
+                    .frame(height: 150)
+                    .animation(.interpolatingSpring(stiffness: 120, damping: 16), value: b.watts)
+                    .animation(.interpolatingSpring(stiffness: 120, damping: 16), value: b.systemWatts)
+                if warn {
+                    Text("Plugged in, but the battery is still draining. The charger or cable gives less than the Mac uses — try a stronger adapter or another cable.")
+                        .font(Brand.text(11)).foregroundStyle(Brand.signal).fixedSize(horizontal: false, vertical: true)
+                } else if let a = b.adapterWatts, b.onAC, b.systemWatts > Double(a) * 0.9 {
+                    Text("The Mac is close to the adapter's \(a) W limit.").font(Brand.text(11)).foregroundStyle(pal.fg.opacity(0.6))
+                }
+            }
+        }
+    }
+}
+
+/// Animatable: SwiftUI інтерполює три потоки між замірами — стрічки плавно товщають і тоншають.
+struct Sankey: View, Animatable {
+    var adapterToBattery: Double
+    var adapterToMac: Double
+    var batteryToMac: Double
+    let onAC: Bool
+    let adapterLabel: String
+    let pal: Palette
+
+    var animatableData: AnimatablePair<Double, AnimatablePair<Double, Double>> {
+        get { .init(adapterToBattery, .init(adapterToMac, batteryToMac)) }
+        set { adapterToBattery = newValue.first; adapterToMac = newValue.second.first; batteryToMac = newValue.second.second }
+    }
+
+    private struct Flow { let from: Int; let to: Int; let w: Double }   // from: 0 адаптер, 1 батарея; to: 0 батарея, 1 Mac
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30)) { tl in
+            let phase = tl.date.timeIntervalSinceReferenceDate
+            Canvas { ctx, size in
+                draw(ctx: ctx, size: size, phase: phase)
+            }
+            .overlay { labels }
+        }
+    }
+
+    private var flows: [Flow] {
+        var f: [Flow] = []
+        if onAC {
+            if adapterToBattery > 0.05 { f.append(Flow(from: 0, to: 0, w: adapterToBattery)) }
+            f.append(Flow(from: 0, to: 1, w: max(adapterToMac, 0.05)))
+            if batteryToMac > 0.05 { f.append(Flow(from: 1, to: 1, w: batteryToMac)) }
+        } else {
+            f.append(Flow(from: 1, to: 1, w: max(batteryToMac, 0.05)))
+        }
+        return f
+    }
+
+    // Геометрія: вузли — колонки з великим радіусом, як на референсі
+    private let nodeW: CGFloat = 54, gap: CGFloat = 12, minBand: CGFloat = 26
+    /// Джерело нижче за споживачів — стрічки розходяться віялом, як на референсі.
+    private let taper: CGFloat = 0.8
+
+    private struct Layout {
+        var left: [Int: CGRect] = [:], right: [Int: CGRect] = [:]
+        var bands: [(Flow, CGRect, CGRect)] = []
+    }
+
+    private func layout(_ size: CGSize) -> Layout {
+        let fs = flows
+        let total = fs.reduce(0) { $0 + $1.w }
+        let usable = size.height - gap * CGFloat(max(0, Set(fs.map(\.to)).count - 1))
+        func h(_ w: Double) -> CGFloat { max(minBand, usable * CGFloat(w / max(total, 0.01))) }
+        let bandHeights = fs.map { h($0.w) }
+        let scale = min(1, usable / bandHeights.reduce(0, +))
+        var L = Layout()
+
+        // Ліві вузли: адаптер зверху, батарея знизу
+        var y: CGFloat = 0
+        for src in [0, 1] {
+            let hs = fs.indices.filter { fs[$0].from == src }.map { bandHeights[$0] * scale * taper }
+            guard !hs.isEmpty else { continue }
+            let hh = hs.reduce(0, +)
+            L.left[src] = CGRect(x: 0, y: y, width: nodeW, height: hh); y += hh + gap
+        }
+        // Праві вузли: батарея зверху, Mac знизу
+        y = 0
+        for dst in [0, 1] {
+            let hs = fs.indices.filter { fs[$0].to == dst }.map { bandHeights[$0] * scale }
+            guard !hs.isEmpty else { continue }
+            let hh = hs.reduce(0, +)
+            L.right[dst] = CGRect(x: size.width - nodeW, y: y, width: nodeW, height: hh); y += hh + gap
+        }
+        // Вертикальне центрування колонок
+        func center(_ d: inout [Int: CGRect]) {
+            let maxY = d.values.map(\.maxY).max() ?? 0
+            let dy = (size.height - maxY) / 2
+            for k in d.keys { d[k] = d[k]!.offsetBy(dx: 0, dy: dy) }
+        }
+        center(&L.left); center(&L.right)
+
+        var outY: [Int: CGFloat] = L.left.mapValues(\.minY), inY: [Int: CGFloat] = L.right.mapValues(\.minY)
+        for (i, f) in fs.enumerated() {
+            let bh = bandHeights[i] * scale
+            guard let a = L.left[f.from], let r = L.right[f.to] else { continue }
+            let s = CGRect(x: a.maxX + 8, y: outY[f.from]!, width: 0, height: bh * taper)
+            let e = CGRect(x: r.minX - 8, y: inY[f.to]!, width: 0, height: bh)
+            outY[f.from]! += bh * taper; inY[f.to]! += bh
+            L.bands.append((f, s, e))
+        }
+        return L
+    }
+
+    private func bandPath(_ s: CGRect, _ e: CGRect) -> Path {
+        var p = Path()
+        let mx = (s.minX + e.minX) / 2
+        p.move(to: CGPoint(x: s.minX, y: s.minY))
+        p.addCurve(to: CGPoint(x: e.minX, y: e.minY), control1: CGPoint(x: mx, y: s.minY), control2: CGPoint(x: mx, y: e.minY))
+        p.addLine(to: CGPoint(x: e.minX, y: e.maxY))
+        p.addCurve(to: CGPoint(x: s.minX, y: s.maxY), control1: CGPoint(x: mx, y: e.maxY), control2: CGPoint(x: mx, y: s.maxY))
+        p.closeSubpath()
+        return p
+    }
+
+    private func draw(ctx: GraphicsContext, size: CGSize, phase: Double) {
+        let L = layout(size)
+        let fill = pal.fg.opacity(pal.dark ? 0.14 : 0.1)
+        for (_, s, e) in L.bands {
+            let path = bandPath(s, e)
+            ctx.fill(path, with: .color(fill))
+            // Світла хвиля, що біжить від джерела до споживача
+            var c = ctx
+            c.clip(to: path)
+            let x = (s.minX - 60) + CGFloat((phase * 0.6).truncatingRemainder(dividingBy: 1)) * (e.minX - s.minX + 120)
+            c.fill(Path(CGRect(x: x, y: 0, width: 50, height: size.height)),
+                   with: .linearGradient(Gradient(colors: [.clear, pal.fg.opacity(0.07), .clear]),
+                                         startPoint: CGPoint(x: x, y: 0), endPoint: CGPoint(x: x + 50, y: 0)))
+        }
+        for r in Array(L.left.values) + Array(L.right.values) {
+            ctx.fill(Path(roundedRect: r, cornerRadius: 18, style: .continuous), with: .color(fill))
+        }
+    }
+
+    @ViewBuilder private var labels: some View {
+        GeometryReader { g in
+            let L = layout(g.size)
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(L.bands.enumerated()), id: \.offset) { _, item in
+                    let (f, s, e) = item
+                    Text(String(format: "%.2f W", f.w))
+                        .font(Brand.text(13, .semibold)).monospacedDigit()
+                        .position(x: (s.minX + e.minX) / 2, y: (s.midY + e.midY) / 2)
+                        .opacity(s.height >= 22 ? 1 : 0)
+                }
+                if let a = L.left[0] {
+                    VStack(spacing: 4) {
+                        Image(systemName: "powerplug.portrait.fill").font(.system(size: 15))
+                        Text(adapterLabel).font(Brand.text(12, .medium))
+                    }
+                    .position(x: a.midX, y: a.midY)
+                }
+                if let bt = L.left[1] {
+                    Image(systemName: "battery.75percent").font(.system(size: 15)).position(x: bt.midX, y: bt.midY)
+                }
+                if let bt = L.right[0] {
+                    Image(systemName: "battery.100percent.bolt").font(.system(size: 15)).position(x: bt.midX, y: bt.midY)
+                }
+                if let m = L.right[1] {
+                    Image(systemName: "laptopcomputer").font(.system(size: 15)).position(x: m.midX, y: m.midY)
+                }
+            }
+        }
+    }
+}
+
+// MARK: Devices
+
+struct DevicesTab: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var s = Settings.shared
+    @Environment(\.palette) private var pal
+
+    var body: some View {
+        let visible = model.devices.filter { !s.rule($0.name).hidden }
+        let hidden = model.devices.filter { s.rule($0.name).hidden }
+        VStack(spacing: 10) {
+            if model.devices.isEmpty {
+                Stage {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("No devices connected").font(Brand.display(20))
+                        Text("AirPods, Magic Mouse, Keyboard, Trackpad, iPhone and iPad show up here while they're connected over Bluetooth.")
+                            .font(Brand.text(11.5)).foregroundStyle(pal.fg.opacity(0.65)).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                ForEach(visible) { d in DeviceCard(device: d) }
+            }
+            if !hidden.isEmpty {
+                HStack {
+                    Text("Hidden: " + hidden.map(\.name).joined(separator: ", ")).font(Brand.text(11)).foregroundStyle(pal.muted).lineLimit(1)
+                    Spacer()
+                    Button("Show all") { hidden.forEach { var r = s.rule($0.name); r.hidden = false; s.deviceRules[$0.name] = r } }
+                        .buttonStyle(.plain).font(Brand.text(11, .semibold))
+                }
+                .padding(.horizontal, 4)
+            }
+            Text("iPhone, iPad and headphones show up when they share their battery over Bluetooth. Apple Watch only reports through the iPhone, so it isn't shown.")
+                .font(Brand.text(10.5)).foregroundStyle(pal.muted).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4)
+        }
+        .onAppear { model.refreshDevices() }
+    }
+}
+
+struct DeviceCard: View {
+    let device: BTDevice
+    @ObservedObject var s = Settings.shared
+    @Environment(\.palette) private var pal
+
+    var body: some View {
+        let r = s.rule(device.name)
+        Panel {
+            VStack(spacing: 8) {
+                HStack {
+                    Spacer()
+                    Menu {
+                        Picker("Low alert", selection: binding(\.low)) {
+                            Text("Off").tag(0)
+                            ForEach([5, 10, 15, 20, 30], id: \.self) { Text("At \($0)%").tag($0) }
+                        }
+                        Toggle("Alert when fully charged", isOn: binding(\.full))
+                        Divider()
+                        Button("Hide device") { var x = r; x.hidden = true; s.deviceRules[device.name] = x }
+                    } label: {
+                        Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(pal.muted)
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                }
+                .frame(height: 8)
+                ZStack {
+                    Circle().stroke(pal.fg.opacity(0.1), lineWidth: 4)
+                    Circle().trim(from: 0, to: max(0.02, Double(device.lowest ?? 0) / 100))
+                        .stroke(pal.level(device.lowest ?? 100), style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    Image(systemName: device.symbol).font(.system(size: 22))
+                }
+                .frame(width: 80, height: 80)
+                Text(device.name).font(Brand.text(12.5, .medium)).lineLimit(1)
+                if device.left != nil || device.right != nil || device.caseLevel != nil {
+                    HStack(spacing: 8) {
+                        if let l = device.left { Part(label: "L", p: l) }
+                        if let x = device.right { Part(label: "R", p: x) }
+                        if let c = device.caseLevel { Part(label: "Case", p: c) }
+                    }
+                } else if let m = device.main {
+                    Text("\(m)%").font(Brand.display(18)).foregroundStyle(pal.level(m))
+                }
+                Spacer(minLength: 0)
+                Text(r.low > 0 ? "Alert at \(r.low)%" : "Alerts off").font(Brand.text(10)).foregroundStyle(pal.muted)
+            }
+            .frame(maxWidth: .infinity, minHeight: 176, alignment: .top)
+        }
+    }
+
+    private func binding<T>(_ kp: WritableKeyPath<DeviceRule, T>) -> Binding<T> {
+        Binding(get: { s.rule(device.name)[keyPath: kp] },
+                set: { var x = s.rule(device.name); x[keyPath: kp] = $0; s.deviceRules[device.name] = x })
+    }
+}
+
+struct Part: View {
+    let label: String, p: Int
+    @Environment(\.palette) private var pal
+    var body: some View {
+        HStack(spacing: 3) {
+            Text(label).font(Brand.text(10.5)).foregroundStyle(pal.muted)
+            Text("\(p)%").font(Brand.mono(10, .semibold)).foregroundStyle(pal.level(p))
+        }
+    }
+}
+
+// MARK: - Налаштування
+
+struct SettingsPage: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var s = Settings.shared
+    @Environment(\.palette) private var pal
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Button { withAnimation(.snappy) { model.page = .main } } label: {
+                    ZStack {
+                        Circle().fill(pal.fg)
+                        Image(systemName: "arrow.left").font(.system(size: 11, weight: .semibold)).foregroundStyle(pal.bg)
+                    }
+                    .frame(width: 30, height: 30)
+                }
+                .buttonStyle(.plain)
+                Text("Settings").font(Brand.display(22)).tracking(-0.6)
+                Spacer()
+            }
+
+            FitScroll {
+                VStack(alignment: .leading, spacing: 10) {
+                    Panel {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label2(text: "Alert when the battery drops to")
+                            ThresholdInput(values: $s.lowAlerts, range: 1...99)
+                            Label2(text: "Alert when it's charged to")
+                            ThresholdInput(values: $s.highAlerts, range: 50...100)
+                        }
+                    }
+                    Panel {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Row("Charger connected") { Toggle("", isOn: $s.onPlug).labelsHidden() }
+                            Row("Charger disconnected") { Toggle("", isOn: $s.onUnplug).labelsHidden() }
+                            Row("Battery too hot") { Toggle("", isOn: $s.heatAlert).labelsHidden() }
+                            Row("Screen glow") { Toggle("", isOn: $s.glow).labelsHidden() }
+                            Row("Keep alerts until clicked") { Toggle("", isOn: $s.persistent).labelsHidden() }
+                            Row("Full-screen alert at") { Picker("", selection: $s.fullScreenAt) {
+                                Text("Off").tag(0)
+                                ForEach([1, 2, 3, 5], id: \.self) { Text("\($0)%").tag($0) }
+                            }.labelsHidden().frame(width: 100) }
+                            Row("Default device alert") { Picker("", selection: $s.deviceLowAt) {
+                                Text("Off").tag(0)
+                                ForEach([5, 10, 15, 20, 30], id: \.self) { Text("\($0)%").tag($0) }
+                            }.labelsHidden().frame(width: 100) }
+                            Row("Sound") { Picker("", selection: $s.sound) {
+                                ForEach(Settings.sounds, id: \.self) { Text($0).tag($0) }
+                            }.labelsHidden().frame(width: 100) }
+                            .onChange(of: s.sound) { _, v in NSSound(named: NSSound.Name(v))?.play() }
+                        }
+                    }
+                    Panel {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Row("Battery percentage") { Picker("", selection: $s.percentMode) {
+                                ForEach(PercentMode.allCases) { Text($0.rawValue).tag($0) }
+                            }.labelsHidden().frame(width: 170) }
+                            Text(s.percentMode.detail).font(Brand.text(10.5)).foregroundStyle(pal.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Divider().overlay(pal.line)
+                            Row("Menu bar icon") { Picker("", selection: $s.iconStyle) {
+                                ForEach(IconStyle.allCases) { Text($0.rawValue).tag($0) }
+                            }.labelsHidden().frame(width: 140) }
+                            Row("Colour by level") { Toggle("", isOn: $s.smartColors).labelsHidden() }
+                            Row("Animate while charging") { Toggle("", isOn: $s.animateCharging).labelsHidden() }
+                            Row("Open at login") { Toggle("", isOn: $s.launchAtLogin).labelsHidden() }
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        InkPill(title: "Test alert") { model.testAlert() }
+                        InkPill(title: "Test full-screen") { model.testFullScreen() }
+                        Spacer()
+                        Button("Quit") { NSApp.terminate(nil) }
+                            .buttonStyle(.plain).font(Brand.text(12, .medium)).foregroundStyle(pal.muted)
+                    }
+                    .padding(.horizontal, 2)
+                }
+                .padding(.bottom, 2)
+            }
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .tint(pal.toggleTint)
+        .padding(12)
+    }
+}
+
+private struct Row<Control: View>: View {
+    let title: String
+    @ViewBuilder let control: Control
+    init(_ title: String, @ViewBuilder control: () -> Control) { self.title = title; self.control = control() }
+    var body: some View {
+        HStack { Text(title).font(Brand.text(12.5)); Spacer(); control }.frame(minHeight: 22)
+    }
+}
+
+/// Пороги — вибрані значення чипами з хрестиком і поле вводу: «15» або «15, 25».
+struct ThresholdInput: View {
+    @Binding var values: Set<Int>
+    let range: ClosedRange<Int>
+    @State private var text = ""
+    @State private var bad = false
+    @Environment(\.palette) private var pal
+
+    var body: some View {
+        FlowRow(spacing: 6) {
+            ForEach(values.sorted(), id: \.self) { v in
+                Button { values.remove(v) } label: {
+                    HStack(spacing: 5) {
+                        Text("\(v)%").font(Brand.text(11.5, .medium)).monospacedDigit()
+                        Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).opacity(0.6)
+                    }
+                    .padding(.horizontal, 11).padding(.vertical, 6)
+                    .background(pal.fg, in: Capsule())
+                    .foregroundStyle(pal.bg)
+                }
+                .buttonStyle(.plain)
+            }
+            HStack(spacing: 2) {
+                TextField("Add %", text: $text)
+                    .textFieldStyle(.plain)
+                    .font(Brand.text(11.5, .medium))
+                    .frame(width: 56)
+                    .onSubmit(add)
+                Text("\(range.lowerBound)–\(range.upperBound)").font(Brand.text(9.5)).foregroundStyle(bad ? Brand.signal : pal.muted)
+            }
+            .padding(.horizontal, 11).padding(.vertical, 6)
+            .background(pal.sunk, in: Capsule())
+            .overlay(Capsule().strokeBorder(bad ? Brand.signal : .clear))
+        }
+    }
+
+    private func add() {
+        let nums = text.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+        let ok = nums.filter { range.contains($0) }
+        bad = ok.count != nums.count || nums.isEmpty
+        values.formUnion(ok)
+        if !bad { text = "" }
+    }
+}
+
+/// Простий перенос рядків для чипів.
+struct FlowRow: Layout {
+    var spacing: CGFloat = 6
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxW = proposal.width ?? 300
+        var x: CGFloat = 0, y: CGFloat = 0, row: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x > 0 && x + s.width > maxW { x = 0; y += row + spacing; row = 0 }
+            x += s.width + spacing; row = max(row, s.height)
+        }
+        return CGSize(width: maxW, height: y + row)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, row: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x > bounds.minX && x + s.width > bounds.maxX { x = bounds.minX; y += row + spacing; row = 0 }
+            v.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
+            x += s.width + spacing; row = max(row, s.height)
+        }
+    }
+}

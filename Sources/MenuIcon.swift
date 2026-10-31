@@ -90,4 +90,21 @@ enum MenuIcon {
         img.isTemplate = false
         return img
     }
+
+    /// Mac без батареї: значок найслабшого пристрою і його відсоток; без пристроїв — вилка.
+    static func desktop(devices: [BTDevice]) -> (NSImage, String?) {
+        guard let d = devices.first(where: { $0.lowest != nil }), let lvl = d.lowest else {
+            let img = NSImage(systemSymbolName: "powerplug.fill", accessibilityDescription: "On power")!
+                .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))!
+            img.isTemplate = true
+            return (img, nil)
+        }
+        let low = lvl <= 20 && Settings.shared.smartColors
+        let cfg = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+            .applying(.init(paletteColors: [low ? .systemRed : .labelColor]))
+        let img = NSImage(systemSymbolName: d.symbol, accessibilityDescription: d.name)?.withSymbolConfiguration(cfg)
+            ?? NSImage(systemSymbolName: "dot.radiowaves.left.and.right", accessibilityDescription: nil)!
+        img.isTemplate = false
+        return (img, "\(lvl)%")
+    }
 }

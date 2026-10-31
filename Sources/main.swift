@@ -48,7 +48,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ n: Notification) { model.history.save() }
 
     private func updateIcon() {
-        guard let b = model.battery, let button = item.button else { return }
+        guard let button = item.button else { return }
+        guard let b = model.battery else {
+            let (img, text) = MenuIcon.desktop(devices: model.devices)
+            button.image = img
+            let low = (model.devices.first?.lowest ?? 100) <= 20 && Settings.shared.smartColors
+            button.attributedTitle = NSAttributedString(string: text.map { " \($0)" } ?? "", attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
+                .foregroundColor: low ? NSColor.systemRed : NSColor.labelColor,
+            ])
+            button.toolTip = model.devices.first.map { "\($0.name): \($0.lowest ?? 0)%" } ?? "No battery · on power"
+            return
+        }
         let style = Settings.shared.iconStyle
         // Смуга біжить по іконці три проходи після підключення, далі — статична блискавка.
         // Постійна анімація коштувала 2–3 % CPU: менюбар-апка не має так їсти батарею, яку стереже.

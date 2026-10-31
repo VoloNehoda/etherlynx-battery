@@ -62,7 +62,12 @@ enum BatteryReader {
         guard IORegistryEntryCreateCFProperties(service, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS,
               let d = props?.takeRetainedValue() as? [String: Any] else { return nil }
 
+        // iMac, Mac mini, Studio: служба є, але батареї немає — тоді рахуємо, що її нема зовсім
+        if (d["BatteryInstalled"] as? NSNumber)?.boolValue == false { return nil }
         let bd = d["BatteryData"] as? [String: Any] ?? [:]
+        let design0 = ((d["DesignCapacity"] ?? bd["DesignCapacity"]) as? NSNumber)?.intValue ?? 0
+        let full0 = ((d["NominalChargeCapacity"] ?? bd["FullChargeCapacity"]) as? NSNumber)?.intValue ?? 0
+        if design0 == 0 && full0 == 0 { return nil }
         func num(_ k: String) -> Int? {
             ((d[k] ?? bd[k]) as? NSNumber).map { Int($0.int64Value) }
         }

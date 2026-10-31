@@ -103,7 +103,7 @@ struct MainPage: View {
                         case .devices: DevicesTab(model: model)
                         }
                     } else {
-                        Panel { Text("No battery found").foregroundStyle(pal.muted).frame(maxWidth: .infinity).padding(30) }
+                        DevicesTab(model: model)
                     }
                 }
                 .padding(.bottom, 2)
@@ -118,7 +118,8 @@ struct TopBar: View {
     @Environment(\.palette) private var pal
     var body: some View {
         HStack(spacing: 2) {
-            ForEach(AppModel.Tab.allCases) { t in
+            // Без батареї лишаються тільки пристрої
+            ForEach(model.battery == nil ? [AppModel.Tab.devices] : AppModel.Tab.allCases) { t in
                 let on = model.tab == t
                 Button { model.tab = t; if t == .power { model.sampleEnergy() } } label: {
                     Text(t.rawValue)

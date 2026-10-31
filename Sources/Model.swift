@@ -67,7 +67,13 @@ final class AppModel: ObservableObject {
     }
 
     func refresh() {
-        guard var b = BatteryReader.read() else { return }
+        guard var b = BatteryReader.read() else {
+            // Mac без батареї (iMac, mini, Studio): живемо пристроями
+            if battery != nil { battery = nil }
+            if tab != .devices { tab = .devices }
+            onChange?()
+            return
+        }
         b.percent = Settings.shared.percentMode.pick(b)
         alerts.evaluate(b)
         alerts.evaluateCharger(b)
@@ -95,6 +101,7 @@ final class AppModel: ObservableObject {
         list.sort { ($0.lowest ?? 101) < ($1.lowest ?? 101) }
         devices = list
         alerts.evaluate(devices: list)
+        onChange?()
     }
 
     func testAlert() {

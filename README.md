@@ -4,12 +4,24 @@ A macOS menu-bar battery app: live charge, health, cycles and temperature, a pow
 
 Requires macOS 14+ on Apple silicon.
 
+## Install
+
+```sh
+brew install --cask volonehoda/tap/etherlynx-battery
+```
+
+Or download the DMG from [Releases](https://github.com/VoloNehoda/etherlynx-battery/releases) and drag the app to Applications.
+
+The app is ad-hoc signed, not notarized. The Homebrew cask clears the quarantine flag after install; with the DMG, the first launch needs right-click → Open (or System Settings → Privacy & Security → Open Anyway).
+
 ## Build
 
 ```sh
 ./build.sh
 open "Etherlynx Battery.app"
 ```
+
+To publish a new version (builds, packages the DMG, creates the GitHub release and bumps the Homebrew cask): `./release.sh 1.0.1`.
 
 Plain `swiftc`, no Xcode project. `build.sh` compiles the app (`Sources/`) and the root helper (`Helper/`), bundles fonts and marks from `Resources/`, and signs ad-hoc.
 
@@ -33,3 +45,7 @@ The helper picks a lever per firmware: `CHTE` or `CH0B`+`CH0C` to pause charging
 
 - iPhone, iPad and Apple Watch through Apple's private battery APIs — they're limited to Apple's own processes. iPhone and iPad appear only when paired and sharing their battery over Bluetooth.
 - Widgets (need an Xcode app extension).
+
+## Fonts
+
+Onest and Geist Mono are bundled under the SIL Open Font License 1.1 — see `Resources/Fonts/*-OFL.txt`.

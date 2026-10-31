@@ -2,18 +2,31 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>Etherlynx Battery</string>
-    <key>CFBundleDisplayName</key><string>Etherlynx Battery</string>
-    <key>CFBundleIdentifier</key><string>xyz.etherlynx.battery</string>
-    <key>CFBundleExecutable</key><string>EtherlynxBattery</string>
-    <key>CFBundleIconFile</key><string>AppIcon</string>
-    <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
-    <key>LSMinimumSystemVersion</key><string>14.0</string>
-    <key>LSUIElement</key><true/>
-    <key>NSHighResolutionCapable</key><true/>
-    <key>NSBluetoothAlwaysUsageDescription</key><string>Etherlynx Battery reads the battery level of your iPhone, iPad and Bluetooth headphones.</string>
-    <key>NSHumanReadableCopyright</key><string>© 2026 Etherlynx Studio</string>
+	<key>CFBundleDisplayName</key>
+	<string>Etherlynx Battery</string>
+	<key>CFBundleExecutable</key>
+	<string>EtherlynxBattery</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>xyz.etherlynx.battery</string>
+	<key>CFBundleName</key>
+	<string>Etherlynx Battery</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Etherlynx Battery reads the battery level of your iPhone, iPad and Bluetooth headphones.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Etherlynx Studio</string>
 </dict>
 </plist>
